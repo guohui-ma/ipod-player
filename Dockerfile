@@ -1,11 +1,12 @@
-FROM node:20-alpine AS builder
+ARG REGISTRY=docker.io
+FROM ${REGISTRY}/library/node:20-alpine AS builder
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm config set registry https://registry.npmmirror.com && npm ci --omit=dev
 
 # Runtime stage
-FROM node:20-alpine
+FROM ${REGISTRY}/library/node:20-alpine
 
 RUN addgroup -S app && adduser -S app -G app
 

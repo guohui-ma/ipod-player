@@ -1,15 +1,19 @@
 services:
   ipod-player:
-    build: .
+    build:
+      context: .
+      args:
+        # Use DaoCloud mirror for users in China. Remove this line if you can access Docker Hub directly.
+        - REGISTRY=docker.m.daocloud.io
     container_name: ipod-player
     ports:
-      - "3001:3001"
+      - "4000:4000"
     environment:
-      - PORT=3001
+      - PORT=4000
       - MUSIC_ROOT=/music
     volumes:
       # Music library — replace /path/to/your/music with your actual music directory on the host
-      - /path/to/your/music:/music:ro
+      - /Users/maguohui/Downloads/music-data:/music:ro
       # Persist music source configuration across container restarts
       - ipod-config:/home/app
     restart: unless-stopped

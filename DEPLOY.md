@@ -11,7 +11,7 @@
 
 - ECS 主机已安装 **Docker** (≥ 20.10) 与 **Docker Compose** (≥ v2)
 - 音乐文件已上传至服务器的某个目录，如 `/data/music`
-- ECS 安全组已放行端口 `3001`（或后续 Nginx 反代端口）
+- ECS 安全组已放行端口 `4000`（或后续 Nginx 反代端口）
 
 ```bash
 # 安装 Docker（Alibaba Cloud Linux / CentOS）
@@ -63,9 +63,9 @@ services:
     build: .
     container_name: ipod-player
     ports:
-      - "3001:3001"
+      - "4000:4000"
     environment:
-      - PORT=3001
+      - PORT=4000
       - MUSIC_ROOT=/music
     volumes:
       # ↓ 替换为你的音乐文件实际路径
@@ -96,7 +96,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-启动后访问 `http://<ECS公网IP>:3001`。
+启动后访问 `http://<ECS公网IP>:4000`。
 
 ---
 
@@ -116,7 +116,7 @@ server {
     server_name music.your-domain.com;   # 替换为你的域名
 
     location / {
-        proxy_pass http://127.0.0.1:3001;
+        proxy_pass http://127.0.0.1:4000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -149,11 +149,11 @@ sudo systemctl reload nginx
 
 | 端口 | 来源 | 用途 |
 |------|------|------|
-| 3001 | 0.0.0.0/0 | 直连访问（测试用） |
+| 4000 | 0.0.0.0/0 | 直连访问（测试用） |
 | 80   | 0.0.0.0/0 | HTTP → HTTPS 跳转 |
 | 443  | 0.0.0.0/0 | HTTPS 访问 |
 
-正式使用后可移除 3001 端口规则，仅保留 80/443。
+正式使用后可移除 4000 端口规则，仅保留 80/443。
 
 ---
 
@@ -166,15 +166,31 @@ docker compose ps
 # 查看日志
 docker compose logs -f ipod-player
 
-# 重启应用
+# 重启应用（不重建镜像）
 docker compose restart
-
-# 更新代码后重建
-docker compose up -d --build
 
 # 停止应用
 docker compose down
 ```
+
+### 更新代码并重启
+
+当 GitHub 上有新版本时，在 ECS 上执行：
+
+```bash
+cd ~/ipod-player
+
+# 拉取最新代码
+git pull
+
+# 重建镜像并替换容器，-d 后台运行
+docker compose up -d --build
+
+# 确认新版本正常运行
+docker compose logs -f
+```
+
+Docker 层缓存会让未改动的层（如 `npm ci`）直接复用，通常几秒内完成重建。数据卷（音乐文件、配置）不受重建影响。
 
 ---
 
@@ -202,7 +218,7 @@ docker compose logs ipod-player
 ```bash
 # 修改 docker-compose.yml 中的宿主机端口
 ports:
-  - "3002:3001"   # 将 3001 改为其他端口
+  - "3002:4000"   # 将 4000 改为其他端口
 ```
 
 **SMB/SSHFS 远程挂载不支持**
