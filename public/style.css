@@ -694,3 +694,40 @@ body.landscape .album-cover {
 body.landscape .spectrum-container {
   height: 60px;
 }
+
+/* ===== Local Source ===== */
+.source-badge {
+  font-size: 9px;
+  color: #8cf;
+  font-weight: 500;
+}
+
+.local-folder-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 14px;
+  background: rgba(255, 200, 60, 0.1);
+  border-bottom: 1px solid rgba(255, 200, 60, 0.15);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.local-folder-hint {
+  color: rgba(255, 200, 60, 0.8);
+}
+
+.local-folder-bar button {
+  background: rgba(255, 200, 60, 0.15);
+  border: 1px solid rgba(255, 200, 60, 0.3);
+  color: #ffcc44;
+  font-size: 10px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.local-folder-bar button:hover {
+  background: rgba(255, 200, 60, 0.25);
+}

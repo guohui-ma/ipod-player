@@ -101,6 +101,10 @@
         <span class="view-info" id="songs-info"></span>
       </div>
       <div class="view-breadcrumb" id="songs-breadcrumb"></div>
+      <div class="local-folder-bar" id="local-folder-bar" style="display:none;">
+        <span class="local-folder-hint">Local source needs re-opening</span>
+        <button id="btn-reopen-local">Re-open Folder</button>
+      </div>
       <div class="search-bar" id="search-bar">
         <input type="text" id="search-input" placeholder="Search songs...">
         <button id="search-clear-btn" style="display:none;">✕</button>
@@ -130,6 +134,7 @@
             </div>
           </div>
           <button class="add-btn" id="btn-show-add-source">+ Add Music Source</button>
+          <button class="add-btn" id="btn-open-local-folder" style="margin-top:8px;">📂 Open Local Folder</button>
         </div>
       </div>
     </div>
@@ -170,6 +175,8 @@
   </svg>
 </button>
 
-<script src="app.js"></script>
+<input type="file" id="local-folder-input" webkitdirectory style="display:none" multiple>
+
+<script type="module" src="app.js"></script>
 </body>
 </html>

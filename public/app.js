@@ -1,3 +1,5 @@
+const { parseBlob } = await import('https://cdn.jsdelivr.net/npm/music-metadata-browser@2.5.11/+esm');
+
 // ===== DOM References =====
 const $ = (sel) => document.querySelector(sel);
 const songTitle = $('#song-title');
@@ -47,6 +49,10 @@ const wBottom = $('#w-bottom');
 const btnSettings = $('#btn-settings');
 const btnPlaylist = $('#btn-playlist');
 const landscapeToggleBtn = $('#landscape-toggle');
+const localFolderInput = $('#local-folder-input');
+const btnOpenLocalFolder = $('#btn-open-local-folder');
+const btnReopenLocal = $('#btn-reopen-local');
+const localFolderBar = $('#local-folder-bar');
 
 
 // ===== State =====
@@ -86,7 +92,11 @@ const state = {
   animationId: null,
   lrcLines: [],
   lrcCurrentIndex: -1,
-  isLandscape: false
+  isLandscape: false,
+  localFileTree: null,
+  localFileList: [],
+  localSources: [],
+  _serverAvailable: undefined
 };
 
 // ===== Helpers =====
@@ -130,6 +140,15 @@ function buildApiUrl(endpoint, params = {}) {
   return url.toString();
 }
 
+function isLocalSource() {
+  const src = state.sources.find(s => s.id === state.activeSourceId);
+  return src && src.type === 'local-files';
+}
+
+function supportsFileSystemAccess() {
+  return 'showDirectoryPicker' in window;
+}
+
 // ===== View Switching =====
 function switchView(view) {
   state.currentView = view;
@@ -137,7 +156,13 @@ function switchView(view) {
   viewSongs.classList.toggle('hidden', view !== 'songs');
   viewSettings.classList.toggle('hidden', view !== 'settings');
 
-  if (view === 'songs' && state.root) browseDirectory(state.currentDir || '');
+  if (view === 'songs') {
+    const needsReopen = isLocalSource() && state.localFileList.length === 0;
+    localFolderBar.style.display = needsReopen ? 'flex' : 'none';
+    if (state.root || isLocalSource()) browseDirectory(state.currentDir || '');
+  } else {
+    localFolderBar.style.display = 'none';
+  }
   if (view === 'settings') renderSettings();
 }
 
@@ -150,17 +175,27 @@ function toggleLandscape() {
 
 // ===== Source Management =====
 async function loadSources() {
+  let serverSources = [];
   try {
     const data = await api('/api/sources');
-    state.sources = data.sources;
-    if (data.lastUsed && state.sources.find(s => s.id === data.lastUsed)) {
-      selectSource(data.lastUsed, false);
-      browseDirectory('');
-    } else if (state.sources.length > 0) {
-      selectSource(state.sources[0].id, false);
-      browseDirectory('');
-    }
-  } catch {
+    serverSources = data.sources;
+  } catch {}
+  // Load local sources from localStorage
+  let localSources = [];
+  try {
+    const raw = localStorage.getItem('ipod-local-sources');
+    if (raw) localSources = JSON.parse(raw);
+  } catch {}
+  state.localSources = localSources;
+  state.sources = [...serverSources, ...localSources];
+  const lastUsed = localStorage.getItem('ipod-last-used');
+  if (lastUsed && state.sources.find(s => s.id === lastUsed)) {
+    selectSource(lastUsed, false);
+    if (!isLocalSource()) browseDirectory('');
+  } else if (state.sources.length > 0) {
+    selectSource(state.sources[0].id, false);
+    if (!isLocalSource()) browseDirectory('');
+  } else {
     browseDirectory('');
   }
 }
@@ -205,6 +240,40 @@ async function addSource() {
 
 async function deleteSource(id) {
   if (!confirm('Delete this source?')) return;
+  const src = state.sources.find(s => s.id === id);
+  if (src && src.type === 'local-files') {
+    if (state.localFileList) {
+      state.localFileList.forEach(f => { if (f.blobUrl) URL.revokeObjectURL(f.blobUrl); });
+    }
+    state.localFileList = [];
+    state.localFileTree = null;
+    state.localSources = state.localSources.filter(s => s.id !== id);
+    localStorage.setItem('ipod-local-sources', JSON.stringify(state.localSources));
+    localStorage.removeItem('ipod-local-files-' + id);
+    try {
+      const req = indexedDB.deleteDatabase('ipod-file-handles');
+      // also try individual store deletion
+      const dbReq = indexedDB.open('ipod-file-handles', 1);
+      dbReq.onsuccess = () => {
+        const tx = dbReq.result.transaction('handles', 'readwrite');
+        tx.objectStore('handles').delete(id);
+        dbReq.result.close();
+      };
+    } catch {}
+    state.sources = state.sources.filter(s => s.id !== id);
+    if (state.activeSourceId === id) {
+      if (state.sources.length > 0) {
+        selectSource(state.sources[0].id, false);
+      } else {
+        state.root = ''; state.activeSourceId = null; state.files = []; state.folders = [];
+        state.currentFile = null;
+        updateSourceLabel(); updateNowPlayingUI();
+      }
+    }
+    renderSettings();
+    if (state.sources.length === 0) switchView('now-playing');
+    return;
+  }
   try {
     const res = await fetch(`/api/sources/${id}`, { method: 'DELETE' });
     if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
@@ -242,7 +311,7 @@ function renderSettings() {
     div.className = 'source-item' + (s.id === state.activeSourceId ? ' active' : '');
     div.innerHTML = `
       <div class="source-item-info">
-        <div class="source-item-name">${escapeHtml(s.name)}</div>
+        <div class="source-item-name">${escapeHtml(s.name)}<span class="source-badge">${s.type === 'local-files' ? ' Local' : ''}</span></div>
         <div class="source-item-path">${escapeHtml(s.path)}</div>
       </div>
       <div class="source-item-actions">
@@ -264,9 +333,14 @@ function renderSettings() {
 // ===== File Browsing =====
 async function browseDirectory(dirPath, page) {
   try {
-    const url = buildApiUrl('/api/browse', { path: dirPath || '', page: page || 1, pageSize: state.pageSize });
-    const data = await api(url);
-    if (!state.root) state.root = data.root;
+    let data;
+    if (isLocalSource()) {
+      data = browseLocalDirectory(dirPath || '', page || 1);
+    } else {
+      const url = buildApiUrl('/api/browse', { path: dirPath || '', page: page || 1, pageSize: state.pageSize });
+      data = await api(url);
+      if (!state.root) state.root = data.root;
+    }
     state.currentDir = data.currentPath;
     state.folders = data.folders;
     state.files = data.files;
@@ -286,8 +360,13 @@ async function searchSongs(query, page) {
     return browseDirectory(state.currentDir, 1);
   }
   try {
-    const url = buildApiUrl('/api/search', { q: query, page: page || 1, pageSize: state.pageSize });
-    const data = await api(url);
+    let data;
+    if (isLocalSource()) {
+      data = searchLocalFiles(query.toLowerCase(), page || 1);
+    } else {
+      const url = buildApiUrl('/api/search', { q: query, page: page || 1, pageSize: state.pageSize });
+      data = await api(url);
+    }
     state.isSearching = true;
     state.searchQuery = query;
     state.searchResults = data.results;
@@ -437,30 +516,62 @@ async function playFile(file) {
 
   state.currentFile = file.path;
   switchView('now-playing');
-  const streamUrl = buildApiUrl('/api/stream', { path: file.path });
-  state.audio.src = streamUrl;
-  state.audio.load();
-  state.audio.play().catch(() => {});
-  state.isPlaying = true;
-  updatePlayPauseIcon();
-  updateNowPlayingUI();
 
-  // Fetch metadata
-  try {
-    const metaUrl = buildApiUrl('/api/metadata', { path: file.path });
-    state.metadata = await api(metaUrl);
-  } catch { state.metadata = null; }
-
-  // Load cover art
-  if (state.metadata && state.metadata.hasCover) {
-    const coverUrl = buildApiUrl('/api/cover', { path: file.path });
-    state.coverUrl = coverUrl;
-    albumCover.style.backgroundImage = `url(${coverUrl})`;
-    screenBg.style.backgroundImage = `url(${coverUrl})`;
+  if (isLocalSource()) {
+    const localFile = state.localFileList.find(f => f.path === file.path);
+    if (localFile) {
+      if (!localFile.blobUrl) localFile.blobUrl = URL.createObjectURL(localFile.file);
+      state.audio.src = localFile.blobUrl;
+      state.audio.load();
+      state.audio.play().catch(() => {});
+      state.isPlaying = true;
+      updatePlayPauseIcon();
+      updateNowPlayingUI();
+      try { state.metadata = await extractLocalMetadata(localFile.file); } catch { state.metadata = null; }
+      try {
+        const coverBlob = await extractLocalCover(localFile.file);
+        if (coverBlob) {
+          if (state.coverUrl && state.coverUrl.startsWith('blob:')) URL.revokeObjectURL(state.coverUrl);
+          state.coverUrl = URL.createObjectURL(coverBlob);
+          albumCover.style.backgroundImage = `url(${state.coverUrl})`;
+          screenBg.style.backgroundImage = `url(${state.coverUrl})`;
+        } else {
+          state.coverUrl = null;
+          albumCover.style.backgroundImage = '';
+          screenBg.style.backgroundImage = '';
+        }
+      } catch {
+        state.coverUrl = null;
+        albumCover.style.backgroundImage = '';
+        screenBg.style.backgroundImage = '';
+      }
+    }
   } else {
-    state.coverUrl = null;
-    albumCover.style.backgroundImage = '';
-    screenBg.style.backgroundImage = '';
+    const streamUrl = buildApiUrl('/api/stream', { path: file.path });
+    state.audio.src = streamUrl;
+    state.audio.load();
+    state.audio.play().catch(() => {});
+    state.isPlaying = true;
+    updatePlayPauseIcon();
+    updateNowPlayingUI();
+
+    // Fetch metadata
+    try {
+      const metaUrl = buildApiUrl('/api/metadata', { path: file.path });
+      state.metadata = await api(metaUrl);
+    } catch { state.metadata = null; }
+
+    // Load cover art
+    if (state.metadata && state.metadata.hasCover) {
+      const coverUrl = buildApiUrl('/api/cover', { path: file.path });
+      state.coverUrl = coverUrl;
+      albumCover.style.backgroundImage = `url(${coverUrl})`;
+      screenBg.style.backgroundImage = `url(${coverUrl})`;
+    } else {
+      state.coverUrl = null;
+      albumCover.style.backgroundImage = '';
+      screenBg.style.backgroundImage = '';
+    }
   }
 
   updateNowPlayingUI();
@@ -799,6 +910,19 @@ settingsBackBtn.addEventListener('click', () => switchView('now-playing'));
 // Landscape toggle
 landscapeToggleBtn.addEventListener('click', toggleLandscape);
 
+// Local folder
+btnOpenLocalFolder.addEventListener('click', () => {
+  if (supportsFileSystemAccess()) {
+    openLocalFolderPathB();
+  } else {
+    localFolderInput.click();
+  }
+});
+btnReopenLocal.addEventListener('click', () => {
+  const src = state.sources.find(s => s.id === state.activeSourceId);
+  if (src && src.type === 'local-files') restoreLocalSource(src.id);
+});
+
 // Search
 let searchDebounce = null;
 searchInput.addEventListener('input', () => {
@@ -864,6 +988,7 @@ async function init() {
   setInterval(updateStatusTime, 30000);
   resizeSpectrum();
   startSpectrum();
+  initLocalFolderInput();
   await loadSources();
 
   if (state.sources.length === 0) {
@@ -885,3 +1010,265 @@ async function init() {
 }
 
 init();
+
+
+// ===== Local File Handlers =====
+
+function initLocalFolderInput() {
+  localFolderInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+    const musicExts = ['.mp3','.flac','.wav','.ogg','.m4a','.aac','.wma','.aiff','.ape','.opus','.mp4','.webm'];
+    const musicFiles = files.filter(f => musicExts.some(ext => f.name.toLowerCase().endsWith(ext)));
+    if (musicFiles.length === 0) { alert('No music files found in selected folder.'); return; }
+    const folderName = files[0].webkitRelativePath.split('/')[0];
+    await addLocalSource(folderName, musicFiles);
+    localFolderInput.value = '';
+  });
+}
+
+async function addLocalSource(name, files) {
+  // Clean up previous local source
+  if (state.localFileList) {
+    state.localFileList.forEach(f => { if (f.blobUrl) URL.revokeObjectURL(f.blobUrl); });
+  }
+  const id = 'local-' + crypto.randomUUID();
+  const source = { id, name, type: 'local-files', storedAt: Date.now() };
+  state.localSources.push(source);
+  localStorage.setItem('ipod-local-sources', JSON.stringify(state.localSources));
+  state.sources = [...state.sources.filter(s => s.type !== 'local-files'), ...state.localSources];
+  buildLocalFileTree(files);
+  selectSource(id, false);
+  renderSettings();
+  switchView('songs');
+}
+
+function buildLocalFileTree(files) {
+  const musicExts = new Set(['.mp3','.flac','.wav','.ogg','.m4a','.aac','.wma','.aiff','.ape','.opus','.mp4','.webm']);
+  const musicFiles = files.filter(f => musicExts.has(getExtension(f.name).toLowerCase()));
+  state.localFileList = musicFiles.map(f => {
+    const relPath = f.webkitRelativePath || f.name;
+    const parts = relPath.split('/'); parts.shift();
+    const virtualPath = parts.join('/') || f.name;
+    const ext = getExtension(f.name).toLowerCase();
+    return { name: f.name, type: 'file', path: virtualPath, ext, duration: 0, file: f, blobUrl: null };
+  });
+  const root = { name: 'root', path: '', folders: [], files: [] };
+  state.localFileList.forEach((entry, idx) => {
+    const parts = entry.path.split('/');
+    let node = root;
+    for (let i = 0; i < parts.length; i++) {
+      if (i === parts.length - 1) {
+        node.files.push(idx);
+      } else {
+        let fld = node.folders.find(x => x.name === parts[i]);
+        if (!fld) {
+          fld = { name: parts[i], path: parts.slice(0, i + 1).join('/'), folders: [], files: [] };
+          node.folders.push(fld);
+        }
+        node = fld;
+      }
+    }
+  });
+  state.localFileTree = root;
+}
+
+function getExtension(filename) {
+  const idx = filename.lastIndexOf('.');
+  return idx >= 0 ? filename.slice(idx) : '';
+}
+
+function browseLocalDirectory(dirPath, page) {
+  if (!state.localFileTree) return { currentPath: dirPath, folders: [], files: [], page: 1, totalPages: 1, totalItems: 0 };
+  let node = state.localFileTree;
+  if (dirPath) {
+    const parts = dirPath.split('/');
+    for (const p of parts) {
+      node = node.folders.find(f => f.name === p);
+      if (!node) break;
+    }
+  }
+  if (!node) return { currentPath: dirPath, folders: [], files: [], page: 1, totalPages: 1, totalItems: 0 };
+  const folders = (node.folders || []).map(f => ({ name: f.name, type: 'folder', path: f.path })).sort((a, b) => a.name.localeCompare(b.name));
+  const allIndices = node.files || [];
+  const allFiles = allIndices.map(i => state.localFileList[i]);
+  const pageSize = state.pageSize;
+  const totalItems = allFiles.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const p = Math.min(page, totalPages);
+  const start = (p - 1) * pageSize;
+  const pageFiles = allFiles.slice(start, start + pageSize);
+  return {
+    root: '', currentPath: dirPath || '',
+    folders,
+    files: pageFiles.map(f => ({ name: f.name, type: 'file', path: f.path, ext: f.ext, duration: f.duration || 0 })),
+    page: p, pageSize, totalItems, totalPages
+  };
+}
+
+function searchLocalFiles(query, page) {
+  const results = state.localFileList
+    .filter(f => f.name.toLowerCase().includes(query))
+    .map(f => ({ name: f.name, path: f.path, directory: f.path.substring(0, f.path.lastIndexOf('/')), ext: f.ext, duration: f.duration || 0 }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const pageSize = state.pageSize;
+  const total = results.length;
+  const totalPages = Math.max(0, Math.ceil(total / pageSize));
+  const p = totalPages > 0 ? Math.min(page, totalPages) : 1;
+  const start = (p - 1) * pageSize;
+  return { results: results.slice(start, start + pageSize), total, page: p, pageSize, totalPages };
+}
+
+async function extractLocalMetadata(file) {
+  const meta = await parseBlob(file);
+  const common = meta.common;
+  const title = common.title || file.name.replace(/\.[^.]+$/, '');
+  let lyrics = '';
+  if (common.lyrics && common.lyrics.length > 0) lyrics = common.lyrics.join('\n');
+  return {
+    title,
+    artist: common.artist || 'Unknown Artist',
+    album: common.album || '',
+    year: common.year || '',
+    genre: Array.isArray(common.genre) ? common.genre.join(', ') : (common.genre || ''),
+    duration: meta.format.duration || 0,
+    bitrate: meta.format.bitrate || 0,
+    sampleRate: meta.format.sampleRate || 0,
+    track: common.track?.no || '',
+    hasCover: !!(common.picture && common.picture.length > 0),
+    lyrics
+  };
+}
+
+async function extractLocalCover(file) {
+  const meta = await parseBlob(file);
+  const pics = meta.common.picture;
+  if (pics && pics.length > 0) {
+    return new Blob([pics[0].data], { type: pics[0].format || 'image/jpeg' });
+  }
+  return null;
+}
+
+// ===== File System Access API (Path B) =====
+
+async function openLocalFolderPathB() {
+  try {
+    const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+    const sourceId = 'local-' + crypto.randomUUID();
+    const sourceName = dirHandle.name;
+    await storeDirectoryHandle(sourceId, dirHandle);
+    const musicFiles = [];
+    await readDirectoryRecursive(dirHandle, '', musicFiles);
+    if (musicFiles.length === 0) { alert('No music files found.'); return; }
+    const source = { id: sourceId, name: sourceName, type: 'local-files', storedAt: Date.now() };
+    state.localSources.push(source);
+    localStorage.setItem('ipod-local-sources', JSON.stringify(state.localSources));
+    state.sources = [...state.sources.filter(s => s.type !== 'local-files'), ...state.localSources];
+    buildLocalFileTreeFromHandle(musicFiles);
+    selectSource(sourceId, false);
+    renderSettings();
+    switchView('songs');
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    // Fall back to Path A
+    localFolderInput.click();
+  }
+}
+
+async function readDirectoryRecursive(dirHandle, basePath, results) {
+  const musicExts = new Set(['.mp3','.flac','.wav','.ogg','.m4a','.aac','.wma','.aiff','.ape','.opus','.mp4','.webm']);
+  for await (const [name, handle] of dirHandle.entries()) {
+    if (handle.kind === 'directory') {
+      const sub = basePath ? basePath + '/' + name : name;
+      await readDirectoryRecursive(handle, sub, results);
+    } else if (handle.kind === 'file') {
+      const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
+      if (musicExts.has(ext)) {
+        const file = await handle.getFile();
+        const vpath = basePath ? basePath + '/' + name : name;
+        results.push({ name, path: vpath, ext, file });
+      }
+    }
+  }
+}
+
+function buildLocalFileTreeFromHandle(musicFiles) {
+  if (state.localFileList) {
+    state.localFileList.forEach(f => { if (f.blobUrl) URL.revokeObjectURL(f.blobUrl); });
+  }
+  state.localFileList = musicFiles.map(f => ({
+    name: f.name, type: 'file', path: f.path, ext: f.ext, duration: 0, file: f.file, blobUrl: null
+  }));
+  const root = { name: 'root', path: '', folders: [], files: [] };
+  state.localFileList.forEach((entry, idx) => {
+    const parts = entry.path.split('/');
+    let node = root;
+    for (let i = 0; i < parts.length; i++) {
+      if (i === parts.length - 1) {
+        node.files.push(idx);
+      } else {
+        let fld = node.folders.find(x => x.name === parts[i]);
+        if (!fld) {
+          fld = { name: parts[i], path: parts.slice(0, i + 1).join('/'), folders: [], files: [] };
+          node.folders.push(fld);
+        }
+        node = fld;
+      }
+    }
+  });
+  state.localFileTree = root;
+}
+
+function openHandleDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('ipod-file-handles', 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore('handles', { keyPath: 'sourceId' }); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function storeDirectoryHandle(sourceId, dirHandle) {
+  const db = await openHandleDB();
+  const tx = db.transaction('handles', 'readwrite');
+  await new Promise((resolve, reject) => {
+    tx.objectStore('handles').put({ sourceId, handle: dirHandle, storedAt: Date.now() });
+    tx.oncomplete = resolve;
+    tx.onerror = reject;
+  });
+}
+
+async function getDirectoryHandle(sourceId) {
+  try {
+    const db = await openHandleDB();
+    const tx = db.transaction('handles', 'readonly');
+    const result = await new Promise((resolve, reject) => {
+      const req = tx.objectStore('handles').get(sourceId);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = reject;
+    });
+    return result?.handle || null;
+  } catch { return null; }
+}
+
+async function restoreLocalSource(id) {
+  const handle = await getDirectoryHandle(id);
+  if (!handle) {
+    alert('Local source no longer accessible. Please re-open the folder.');
+    return;
+  }
+  const opts = { mode: 'read' };
+  if (await handle.queryPermission(opts) !== 'granted') {
+    if (await handle.requestPermission(opts) !== 'granted') {
+      alert('Permission denied.');
+      return;
+    }
+  }
+  const musicFiles = [];
+  await readDirectoryRecursive(handle, '', musicFiles);
+  if (musicFiles.length === 0) { alert('No music files found.'); return; }
+  buildLocalFileTreeFromHandle(musicFiles);
+  selectSource(id, false);
+  switchView('songs');
+  localFolderBar.style.display = 'none';
+}
