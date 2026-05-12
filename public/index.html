@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>iPod Music Player</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="device">
+
+  <!-- Screen -->
+  <div class="screen" id="screen">
+
+    <!-- Now Playing View -->
+    <div class="screen-view" id="view-now-playing">
+      <div class="screen-blur-bg" id="screen-bg"></div>
+      <div class="screen-overlay"></div>
+
+      <div class="status-bar">
+        <span id="status-time">9:41</span>
+        <div class="status-right">
+          <svg width="12" height="10" viewBox="0 0 12 10">
+            <rect x="0" y="6" width="2" height="4" rx="1"/>
+            <rect x="3" y="4" width="2" height="6" rx="1"/>
+            <rect x="6" y="2" width="2" height="8" rx="1"/>
+            <rect x="9" y="0" width="2" height="10" rx="1"/>
+          </svg>
+          <span id="play-mode-icon">▶</span>
+          <span id="battery-text">100%</span>
+        </div>
+      </div>
+
+      <div class="main-content">
+        <div class="now-playing-top">
+          <div class="album-cover" id="album-cover"></div>
+          <div class="song-info">
+            <div class="marquee-wrap">
+              <span class="marquee-text song-title" id="song-title">No Track</span>
+            </div>
+            <p class="song-artist" id="song-artist">Select a song</p>
+            <p class="song-album" id="song-album"></p>
+            <div class="marquee-wrap">
+              <span class="marquee-text song-lyric" id="song-lyric"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="track-actions">
+          <div class="action-spacer"></div>
+          <div class="action-icons">
+            <svg class="interactive-icon" id="btn-playlist" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+              <line x1="8" y1="6" x2="21" y2="6"></line>
+              <line x1="8" y1="12" x2="21" y2="12"></line>
+              <line x1="8" y1="18" x2="21" y2="18"></line>
+              <line x1="3" y1="6" x2="3.01" y2="6"></line>
+              <line x1="3" y1="12" x2="3.01" y2="12"></line>
+              <line x1="3" y1="18" x2="3.01" y2="18"></line>
+            </svg>
+            <svg class="interactive-icon" id="btn-settings" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path>
+            </svg>
+          </div>
+        </div>
+
+        <div class="progress-container">
+          <div class="progress-times">
+            <span id="time-current">0:00</span>
+            <span id="time-total">--:--</span>
+          </div>
+          <div class="progress-bar-bg" id="progress-bg">
+            <div class="progress-bar-fill" id="progress-fill"></div>
+          </div>
+        </div>
+
+        <div class="spectrum-container">
+          <canvas id="spectrum-canvas"></canvas>
+        </div>
+      </div>
+
+      <div class="output-bar">
+        <div class="device-output" id="source-label">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 14c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4z"></path>
+          </svg>
+          <span>No Source</span>
+        </div>
+        <div class="output-actions">
+          <span id="track-count">0 tracks</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Songs View -->
+    <div class="screen-view hidden" id="view-songs">
+      <div class="view-header">
+        <button class="back-btn" id="songs-back-btn">←</button>
+        <span class="view-title">Songs</span>
+        <span class="view-info" id="songs-info"></span>
+      </div>
+      <div class="view-breadcrumb" id="songs-breadcrumb"></div>
+      <div class="search-bar" id="search-bar">
+        <input type="text" id="search-input" placeholder="Search songs...">
+        <button id="search-clear-btn" style="display:none;">✕</button>
+      </div>
+      <div class="view-scroll" id="songs-list">
+        <div class="empty-msg">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Settings View -->
+    <div class="screen-view hidden" id="view-settings">
+      <div class="view-header">
+        <button class="back-btn" id="settings-back-btn">←</button>
+        <span class="view-title">Settings</span>
+        <span></span>
+      </div>
+      <div class="view-scroll" id="settings-content">
+        <div class="settings-section">
+          <h3>Music Sources</h3>
+          <div id="source-list"></div>
+          <div class="add-source-form" id="add-source-form" style="display:none;">
+            <input type="text" id="new-source-name" placeholder="Source name">
+            <input type="text" id="new-source-path" placeholder="Directory path">
+            <div class="form-actions">
+              <button id="btn-add-source-save">Save</button>
+              <button id="btn-add-source-cancel">Cancel</button>
+            </div>
+          </div>
+          <button class="add-btn" id="btn-show-add-source">+ Add Music Source</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Click Wheel -->
+  <div class="click-wheel" id="click-wheel">
+    <div class="wheel-center" id="wheel-center"></div>
+    <!-- Top: Menu -->
+    <svg class="w-btn w-top" id="w-top" viewBox="0 0 24 24">
+      <rect x="3" y="3" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
+      <rect x="14" y="3" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
+      <rect x="3" y="14" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
+      <rect x="14" y="14" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/>
+    </svg>
+    <!-- Left: Previous -->
+    <svg class="w-btn w-left" id="w-left" viewBox="0 0 24 24">
+      <path d="M19 20L9 12l10-8v16z"/>
+      <path d="M5 19V5h2v14H5z"/>
+    </svg>
+    <!-- Right: Next -->
+    <svg class="w-btn w-right" id="w-right" viewBox="0 0 24 24">
+      <path d="M5 4l10 8-10 8V4z"/>
+      <path d="M19 5v14h-2V5h2z"/>
+    </svg>
+    <!-- Bottom: Play/Pause -->
+    <svg class="w-btn w-bottom" id="w-bottom" viewBox="0 0 24 24">
+      <path d="M8 5v14l11-7z"/>
+    </svg>
+  </div>
+
+</div>
+
+<button class="landscape-toggle" id="landscape-toggle" title="Toggle Landscape">
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="1 4 1 10 7 10"/>
+    <path d="M3.5 15a9 9 0 1 0 2.1-8.4L1 10"/>
+  </svg>
+</button>
+
+<script src="app.js"></script>
+</body>
+</html>
