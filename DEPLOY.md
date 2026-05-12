@@ -1,5 +1,12 @@
 # iPod Music Player — Docker 部署文档
 
+## 功能概览
+
+部署后提供两种播放模式：
+
+- **服务端模式**：访问者播放服务器上存储的音乐文件
+- **客户端模式**：访问者可以点击「Open Local Folder」选择自己电脑上的音乐目录直接播放（无需上传），支持 Chrome/Edge 的 File System Access API 持久化授权
+
 ## 前置要求
 
 - ECS 主机已安装 **Docker** (≥ 20.10) 与 **Docker Compose** (≥ v2)
@@ -201,3 +208,12 @@ ports:
 **SMB/SSHFS 远程挂载不支持**
 - Docker 容器默认不支持 FUSE 文件系统挂载
 - 如需远程音乐源，在宿主机上先挂载再以卷形式传入容器，或使用 `privileged: true`（不推荐）
+
+**客户端本地文件播放不可用**
+- 客户端模式通过 CDN 加载 `music-metadata-browser` 解析元数据
+- 确认浏览器可访问 `https://cdn.jsdelivr.net`
+- 如部署在内网环境，可将 `public/app.js` 中的 CDN 地址替换为本地路径
+
+**File System Access API 不可用**
+- Firefox / Safari 不支持 `showDirectoryPicker()`，会自动回退到文件选择器模式
+- 两种模式均可正常播放，区别仅在于 Path B 可在刷新后记住授权
