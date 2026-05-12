@@ -1,0 +1,18 @@
+services:
+  ipod-player:
+    build: .
+    container_name: ipod-player
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - MUSIC_ROOT=/music
+    volumes:
+      # Music library — replace /path/to/your/music with your actual music directory on the host
+      - /path/to/your/music:/music:ro
+      # Persist music source configuration across container restarts
+      - ipod-config:/home/app
+    restart: unless-stopped
+
+volumes:
+  ipod-config:
